@@ -1,18 +1,40 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEXUS POLLINATIONS ULTIMATE — .gitignore
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Other files and folders
-.settings/
+# --- Sessions & Cache local (Généré à l'exécution) ---
+NexusUltimate/
+*.session.json
+cache/
+sessions/
+logs/
+*.log
+*.tmp
+*.bak
 
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
 
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+credentials.json
+
+# --- OS & IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
