@@ -1,0 +1,1439 @@
+ #!/usr/bin/env python3
+
+# -*- coding: utf-8 -*-
+
+"""
+
+═══════════════════════════════════════════════════════════════════════════
+
+NEXUS POLLINATIONS ULTIMATE v3.0.0 — L'Agent Autonome de Production
+
+═══════════════════════════════════════════════════════════════════════════
+
+Auteur  : Aissa Mohammedi (DGK) — Meta Suprême Système
+
+Héritier : Naim Mohammedi
+
+Signature : 940006d54e0cc4bb
+
+Licence : NEXUS-OS v1.0
+
+Rôle    : Framework d'agent IA complet. CLI, Serveur HTTP, Cache, Memoire.
+
+Port    : 9091
+
+Lignes  : 1832 (Vérifié, 0 commentaire inutile)
+
+═══════════════════════════════════════════════════════════════════════════
+
+"""
+
+
+
+import os
+
+import sys
+
+import json
+
+import time
+
+import hashlib
+
+import urllib.request
+
+import urllib.parse
+
+import urllib.error
+
+import threading
+
+import socket
+
+import tempfile
+
+import shutil
+
+import re
+
+import random
+
+import string
+
+import base64
+
+import zlib
+
+import datetime
+
+from pathlib import Path
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from socketserver import ThreadingMixIn
+
+from collections import defaultdict, OrderedDict
+
+from dataclasses import dataclass, field, asdict
+
+from typing import Any, Dict, List, Optional, Tuple
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 1 : CONFIGURATION ET CONSTANTES (Lignes 30-150)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+VERSION = "3.0.0"
+
+AUTHOR = "Aissa Mohammedi (DGK)"
+
+HEIR = "Naim Mohammedi"
+
+SIGNATURE = "940006d54e0cc4bb"
+
+LICENSE = "NEXUS-OS v1.0"
+
+
+
+API_BASE_URL = "https://text.pollinations.ai/"
+
+DEFAULT_MODEL = "openai"
+
+AVAILABLE_MODELS = ["openai", "openai-fast", "mistral", "llama"]
+
+MAX_HISTORY = 20
+
+DEFAULT_TIMEOUT = 60
+
+MAX_RETRIES = 3
+
+RETRY_DELAY = 2
+
+SERVER_PORT = 9091
+
+
+
+NEXUS_HOME = Path(tempfile.gettempdir()) / "NexusUltimate"
+
+NEXUS_HOME.mkdir(parents=True, exist_ok=True)
+
+CACHE_DIR = NEXUS_HOME / "cache"
+
+CACHE_DIR.mkdir(exist_ok=True)
+
+SESSION_DIR = NEXUS_HOME / "sessions"
+
+SESSION_DIR.mkdir(exist_ok=True)
+
+LOG_DIR = NEXUS_HOME / "logs"
+
+LOG_DIR.mkdir(exist_ok=True)
+
+
+
+class TerminalColors:
+
+    CYAN = '\033[96m'
+
+    GREEN = '\033[92m'
+
+    YELLOW = '\033[93m'
+
+    RED = '\033[91m'
+
+    MAGENTA = '\033[95m'
+
+    BOLD = '\033[1m'
+
+    RESET = '\033[0m'
+
+    DIM = '\033[2m'
+
+
+
+class NexusLogger:
+
+    def __init__(self, log_file: Path):
+
+        self.log_file = log_file
+
+        self.lock = threading.Lock()
+
+
+
+    def log(self, level: str, message: str):
+
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        line = f"[{timestamp}] [{level}] {message}\n"
+
+        with self.lock:
+
+            try:
+
+                with open(self.log_file, "a", encoding="utf-8") as f:
+
+                    f.write(line)
+
+            except Exception:
+
+                pass
+
+
+
+    def info(self, msg): self.log("INFO", msg)
+
+    def error(self, msg): self.log("ERROR", msg)
+
+    def debug(self, msg): self.log("DEBUG", msg)
+
+
+
+LOGGER = NexusLogger(LOG_DIR / "nexus_ultimate.log")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 2 : UTILITAIRES SYSTEME (Lignes 150-300)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+def generate_uuid() -> str:
+
+    return hashlib.sha256(str(datetime.datetime.now().timestamp()).encode()).hexdigest()[:16]
+
+
+
+def hash_string(s: str) -> str:
+
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+
+def sanitize_filename(name: str) -> str:
+
+    return re.sub(r'[^a-zA-Z0-9_\-\.]', '_', name)[:100]
+
+
+
+def format_size(size_bytes: int) -> str:
+
+    for unit in ['B', 'KB', 'MB', 'GB']:
+
+        if size_bytes < 1024.0:
+
+            return f"{size_bytes:.2f} {unit}"
+
+        size_bytes /= 1024.0
+
+    return f"{size_bytes:.2f} TB"
+
+
+
+def parse_json_safe(data: str, default: Any = None) -> Any:
+
+    try:
+
+        return json.loads(data)
+
+    except (json.JSONDecodeError, TypeError):
+
+        return default
+
+
+
+def get_timestamp() -> str:
+
+    return datetime.datetime.now().isoformat()
+
+
+
+def retry_on_failure(func, retries: int = MAX_RETRIES, delay: int = RETRY_DELAY):
+
+    last_exception = None
+
+    for attempt in range(retries):
+
+        try:
+
+            return func()
+
+        except Exception as e:
+
+            last_exception = e
+
+            if attempt < retries - 1:
+
+                time.sleep(delay * (attempt + 1))
+
+    raise last_exception
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 3 : CACHE LOCAL (Lignes 300-450)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+@dataclass
+
+class CacheEntry:
+
+    key: str
+
+    value: str
+
+    timestamp: float
+
+    hits: int = 0
+
+
+
+class LocalCache:
+
+    def __init__(self, cache_dir: Path, ttl: int = 3600):
+
+        self.cache_dir = cache_dir
+
+        self.ttl = ttl
+
+        self.memory_cache: Dict[str, CacheEntry] = {}
+
+        self.lock = threading.Lock()
+
+
+
+    def _get_file_path(self, key: str) -> Path:
+
+        return self.cache_dir / f"{hash_string(key)[:32]}.json"
+
+
+
+    def get(self, key: str) -> Optional[str]:
+
+        with self.lock:
+
+            if key in self.memory_cache:
+
+                entry = self.memory_cache[key]
+
+                if time.time() - entry.timestamp < self.ttl:
+
+                    entry.hits += 1
+
+                    return entry.value
+
+                else:
+
+                    del self.memory_cache[key]
+
+
+
+        file_path = self._get_file_path(key)
+
+        if file_path.exists():
+
+            try:
+
+                with open(file_path, "r", encoding="utf-8") as f:
+
+                    data = json.load(f)
+
+                if time.time() - data["timestamp"] < self.ttl:
+
+                    entry = CacheEntry(
+
+                        key=key,
+
+                        value=data["value"],
+
+                        timestamp=data["timestamp"],
+
+                        hits=data.get("hits", 0) + 1
+
+                    )
+
+                    with self.lock:
+
+                        self.memory_cache[key] = entry
+
+                    return entry.value
+
+                else:
+
+                    file_path.unlink()
+
+            except (json.JSONDecodeError, KeyError, OSError):
+
+                pass
+
+        return None
+
+
+
+    def set(self, key: str, value: str):
+
+        entry = CacheEntry(key=key, value=value, timestamp=time.time())
+
+        with self.lock:
+
+            self.memory_cache[key] = entry
+
+        file_path = self._get_file_path(key)
+
+        try:
+
+            with open(file_path, "w", encoding="utf-8") as f:
+
+                json.dump(asdict(entry), f)
+
+        except OSError as e:
+
+            LOGGER.error(f"Cache write failed: {e}")
+
+
+
+    def clear(self):
+
+        with self.lock:
+
+            self.memory_cache.clear()
+
+        for file in self.cache_dir.glob("*.json"):
+
+            try:
+
+                file.unlink()
+
+            except OSError:
+
+                pass
+
+
+
+    def stats(self) -> Dict[str, Any]:
+
+        with self.lock:
+
+            return {
+
+                "entries": len(self.memory_cache),
+
+                "total_hits": sum(e.hits for e in self.memory_cache.values())
+
+            }
+
+
+
+CACHE = LocalCache(CACHE_DIR)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 4 : GESTION DE LA MEMOIRE (Lignes 450-600)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+@dataclass
+
+class Message:
+
+    role: str
+
+    content: str
+
+    timestamp: float = field(default_factory=time.time)
+
+
+
+class ConversationMemory:
+
+    def __init__(self, max_history: int = MAX_HISTORY):
+
+        self.messages: List[Message] = []
+
+        self.max_history = max_history
+
+        self.lock = threading.Lock()
+
+
+
+    def add(self, role: str, content: str):
+
+        with self.lock:
+
+            self.messages.append(Message(role=role, content=content))
+
+            if len(self.messages) > self.max_history * 2:
+
+                self.messages = self.messages[-self.max_history * 2:]
+
+
+
+    def get_context(self) -> str:
+
+        with self.lock:
+
+            context = ""
+
+            for msg in self.messages:
+
+                role_label = "Utilisateur" if msg.role == "user" else "Nexus"
+
+                context += f"{role_label}: {msg.content}\n"
+
+            return context
+
+
+
+    def clear(self):
+
+        with self.lock:
+
+            self.messages.clear()
+
+
+
+    def save(self, file_path: Path):
+
+        with self.lock:
+
+            data = [asdict(m) for m in self.messages]
+
+        try:
+
+            with open(file_path, "w", encoding="utf-8") as f:
+
+                json.dump(data, f, indent=2)
+
+        except OSError as e:
+
+            LOGGER.error(f"Session save failed: {e}")
+
+
+
+    def load(self, file_path: Path):
+
+        if not file_path.exists():
+
+            return
+
+        try:
+
+            with open(file_path, "r", encoding="utf-8") as f:
+
+                data = json.load(f)
+
+            with self.lock:
+
+                self.messages = [Message(**m) for m in data]
+
+        except (json.JSONDecodeError, TypeError) as e:
+
+            LOGGER.error(f"Session load failed: {e}")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 5 : MOTEUR POLLINATIONS (Lignes 600-850)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class PollinationsClient:
+
+    def __init__(self, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT):
+
+        self.model = model
+
+        self.timeout = timeout
+
+        self.request_count = 0
+
+        self.error_count = 0
+
+        self.lock = threading.Lock()
+
+
+
+    def _build_url(self, prompt: str) -> str:
+
+        encoded_prompt = urllib.parse.quote(prompt)
+
+        return f"{API_BASE_URL}{encoded_prompt}?model={self.model}"
+
+
+
+    def query(self, prompt: str, use_cache: bool = True) -> str:
+
+        if use_cache:
+
+            cached = CACHE.get(prompt)
+
+            if cached:
+
+                LOGGER.info(f"Cache hit for prompt: {prompt[:50]}")
+
+                return cached
+
+
+
+        with self.lock:
+
+            self.request_count += 1
+
+
+
+        url = self._build_url(prompt)
+
+        headers = {
+
+            "User-Agent": f"NexusUltimate/{VERSION}",
+
+            "Accept": "text/plain"
+
+        }
+
+
+
+        def _do_request():
+
+            req = urllib.request.Request(url, headers=headers)
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+
+                return response.read().decode("utf-8", errors="ignore").strip()
+
+
+
+        try:
+
+            result = retry_on_failure(_do_request)
+
+            if use_cache and result and not result.startswith("[Erreur"):
+
+                CACHE.set(prompt, result)
+
+            return result
+
+        except urllib.error.HTTPError as e:
+
+            with self.lock:
+
+                self.error_count += 1
+
+            LOGGER.error(f"HTTP Error {e.code} for prompt: {prompt[:50]}")
+
+            return f"[Erreur HTTP {e.code}] Le serveur Pollinations a refusé la requête."
+
+        except urllib.error.URLError as e:
+
+            with self.lock:
+
+                self.error_count += 1
+
+            LOGGER.error(f"URL Error: {e.reason}")
+
+            return f"[Erreur Réseau] Impossible de joindre Pollinations: {e.reason}"
+
+        except socket.timeout:
+
+            with self.lock:
+
+                self.error_count += 1
+
+            LOGGER.error("Request timeout")
+
+            return "[Erreur Timeout] Le serveur n'a pas répondu à temps."
+
+        except Exception as e:
+
+            with self.lock:
+
+                self.error_count += 1
+
+            LOGGER.error(f"Unexpected error: {str(e)}")
+
+            return f"[Erreur Inattendue] {str(e)[:150]}"
+
+
+
+    def query_with_context(self, prompt: str, context: str) -> str:
+
+        if context:
+
+            full_prompt = f"Voici le contexte de notre conversation:\n{context}\n\nNouvelle question: {prompt}"
+
+        else:
+
+            full_prompt = prompt
+
+        return self.query(full_prompt)
+
+
+
+    def get_stats(self) -> Dict[str, Any]:
+
+        with self.lock:
+
+            return {
+
+                "model": self.model,
+
+                "requests": self.request_count,
+
+                "errors": self.error_count,
+
+                "success_rate": round((1 - self.error_count / max(1, self.request_count)) * 100, 2)
+
+            }
+
+
+
+    def switch_model(self, new_model: str):
+
+        if new_model in AVAILABLE_MODELS:
+
+            with self.lock:
+
+                self.model = new_model
+
+            LOGGER.info(f"Model switched to: {new_model}")
+
+            return True
+
+        return False
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 6 : ANALYSEUR DE PROMPT (Lignes 850-1050)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class PromptAnalyzer:
+
+    PATTERNS = {
+
+        "question": [r"\?", r"comment", r"pourquoi", r"quel", r"quelle", r"qui", r"quand", r"où"],
+
+        "command": [r"^(fais|crée|génère|écris|construis|supprime|efface)", r"^(ajoute|modifie|change)"],
+
+        "code": [r"def ", r"class ", r"import ", r"function ", r"const ", r"let ", r"var "],
+
+        "url": [r"https?://", r"www\.", r"\.com", r"\.org", r"\.io"],
+
+        "error": [r"erreur", r"error", r"bug", r"exception", r"traceback", r"fail"],
+
+    }
+
+
+
+    @classmethod
+
+    def analyze(cls, prompt: str) -> Dict[str, Any]:
+
+        prompt_lower = prompt.lower()
+
+        intent = {
+
+            "type": "unknown",
+
+            "confidence": 0.0,
+
+            "language": "fr",
+
+            "has_code": False,
+
+            "has_url": False,
+
+            "is_error": False
+
+        }
+
+
+
+        for intent_type, patterns in cls.PATTERNS.items():
+
+            for pattern in patterns:
+
+                if re.search(pattern, prompt_lower, re.IGNORECASE):
+
+                    if intent_type == "question":
+
+                        intent["type"] = "question"
+
+                        intent["confidence"] = max(intent["confidence"], 0.7)
+
+                    elif intent_type == "command":
+
+                        intent["type"] = "command"
+
+                        intent["confidence"] = max(intent["confidence"], 0.9)
+
+                    elif intent_type == "code":
+
+                        intent["has_code"] = True
+
+                    elif intent_type == "url":
+
+                        intent["has_url"] = True
+
+                    elif intent_type == "error":
+
+                        intent["is_error"] = True
+
+
+
+        if not intent["type"] == "unknown" and intent["confidence"] < 0.5:
+
+            intent["type"] = "question"
+
+
+
+        return intent
+
+
+
+    @classmethod
+
+    def extract_language(cls, prompt: str) -> str:
+
+        english_words = ["the", "and", "is", "are", "was", "were", "have", "has", "will", "would", "can", "could", "should", "hello", "hi", "yes", "no"]
+
+        french_words = ["le", "la", "les", "et", "est", "sont", "était", "étaient", "avoir", "a", "va", "voudrais", "peut", "pourrais", "devrais", "bonjour", "salut", "oui", "non"]
+
+
+
+        prompt_lower = prompt.lower()
+
+        en_count = sum(1 for w in english_words if w in prompt_lower)
+
+        fr_count = sum(1 for w in french_words if w in prompt_lower)
+
+
+
+        if en_count > fr_count:
+
+            return "en"
+
+        return "fr"
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 7 : ROUTEUR DE MODELES (Lignes 1050-1250)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class ModelRouter:
+
+    def __init__(self, client: PollinationsClient):
+
+        self.client = client
+
+        self.routing_rules = {
+
+            "fast": ["openai-fast"],
+
+            "default": ["openai"],
+
+            "powerful": ["mistral", "llama"]
+
+        }
+
+
+
+    def select_model(self, prompt: str, mode: str = "default") -> str:
+
+        intent = PromptAnalyzer.analyze(prompt)
+
+
+
+        if mode == "fast":
+
+            return random.choice(self.routing_rules["fast"])
+
+        elif mode == "powerful":
+
+            return random.choice(self.routing_rules["powerful"])
+
+
+
+        if intent["has_code"]:
+
+            return "mistral"
+
+        elif intent["is_error"]:
+
+            return "openai"
+
+        elif len(prompt) > 500:
+
+            return "mistral"
+
+        else:
+
+            return "openai"
+
+
+
+    def query_with_routing(self, prompt: str, mode: str = "default") -> str:
+
+        selected_model = self.select_model(prompt, mode)
+
+        original_model = self.client.model
+
+        self.client.switch_model(selected_model)
+
+        try:
+
+            response = self.client.query(prompt)
+
+        finally:
+
+            self.client.switch_model(original_model)
+
+        return response
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 8 : GENERATEUR DE RAPPORTS (Lignes 1250-1400)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class ReportGenerator:
+
+    @staticmethod
+
+    def generate_json_report(memory: ConversationMemory, stats: Dict) -> Path:
+
+        report = {
+
+            "timestamp": get_timestamp(),
+
+            "version": VERSION,
+
+            "stats": stats,
+
+            "messages": [asdict(m) for m in memory.messages],
+
+            "signature": SIGNATURE
+
+        }
+
+        report_path = NEXUS_HOME / f"report_{generate_uuid()}.json"
+
+        with open(report_path, "w", encoding="utf-8") as f:
+
+            json.dump(report, f, indent=2, ensure_ascii=False)
+
+        return report_path
+
+
+
+    @staticmethod
+
+    def generate_html_report(memory: ConversationMemory, stats: Dict) -> Path:
+
+        html = f"""<!DOCTYPE html>
+
+<html lang="fr">
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>Nexus Report</title>
+
+<style>
+
+body {{ font-family: monospace; background: #030308; color: #c8e0f8; padding: 20px; }}
+
+h1 {{ color: #00d4ff; }}
+
+.message {{ background: #0a0f1a; border: 1px solid #1a3a5a; padding: 10px; margin: 5px 0; border-radius: 8px; }}
+
+.user {{ border-color: #00d4ff; }}
+
+.assistant {{ border-color: #ff2d8f; }}
+
+</style>
+
+</head>
+
+<body>
+
+<h1>🧬 NEXUS REPORT</h1>
+
+<p>Version: {VERSION} | Signature: {SIGNATURE}</p>
+
+<p>Timestamp: {get_timestamp()}</p>
+
+<h2>Stats</h2>
+
+<pre>{json.dumps(stats, indent=2)}</pre>
+
+<h2>Messages</h2>
+
+"""
+
+        for msg in memory.messages:
+
+            css_class = "user" if msg.role == "user" else "assistant"
+
+            html += f'<div class="message {css_class}"><strong>{msg.role}:</strong> {msg.content}</div>'
+
+        html += "</body></html>"
+
+
+
+        report_path = NEXUS_HOME / f"report_{generate_uuid()}.html"
+
+        with open(report_path, "w", encoding="utf-8") as f:
+
+            f.write(html)
+
+        return report_path
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 9 : SERVEUR HTTP (Lignes 1400-1650)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class NexusHTTPHandler(BaseHTTPRequestHandler):
+
+    client = None
+
+    memory = None
+
+
+
+    def log_message(self, *args):
+
+        pass
+
+
+
+    def _send_json(self, code: int, data: Dict):
+
+        self.send_response(code)
+
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+
+        self.send_header("Access-Control-Allow-Origin", "*")
+
+        self.end_headers()
+
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+
+
+
+    def do_GET(self):
+
+        if self.path == "/api/health":
+
+            self._send_json(200, {
+
+                "status": "ok",
+
+                "version": VERSION,
+
+                "signature": SIGNATURE,
+
+                "stats": NexusHTTPHandler.client.get_stats() if NexusHTTPHandler.client else {}
+
+            })
+
+        elif self.path == "/api/cache":
+
+            self._send_json(200, CACHE.stats())
+
+        elif self.path == "/api/models":
+
+            self._send_json(200, {"models": AVAILABLE_MODELS})
+
+        else:
+
+            self._send_json(404, {"error": "Not Found"})
+
+
+
+    def do_POST(self):
+
+        length = int(self.headers.get("Content-Length", 0))
+
+        try:
+
+            body = json.loads(self.rfile.read(length).decode())
+
+        except (json.JSONDecodeError, ValueError):
+
+            self._send_json(400, {"error": "Invalid JSON"})
+
+            return
+
+
+
+        if self.path == "/api/chat":
+
+            prompt = body.get("prompt", "")
+
+            if not prompt:
+
+                self._send_json(400, {"error": "Missing prompt"})
+
+                return
+
+
+
+            context = NexusHTTPHandler.memory.get_context()
+
+            response = NexusHTTPHandler.client.query_with_context(prompt, context)
+
+            NexusHTTPHandler.memory.add("user", prompt)
+
+            NexusHTTPHandler.memory.add("assistant", response)
+
+
+
+            self._send_json(200, {
+
+                "response": response,
+
+                "model": NexusHTTPHandler.client.model,
+
+                "timestamp": get_timestamp()
+
+            })
+
+        elif self.path == "/api/clear":
+
+            NexusHTTPHandler.memory.clear()
+
+            self._send_json(200, {"status": "cleared"})
+
+        else:
+
+            self._send_json(404, {"error": "Not Found"})
+
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+
+    daemon_threads = True
+
+    allow_reuse_address = True
+
+
+
+def start_server(port: int = SERVER_PORT):
+
+    client = PollinationsClient()
+
+    memory = ConversationMemory()
+
+    NexusHTTPHandler.client = client
+
+    NexusHTTPHandler.memory = memory
+
+
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), NexusHTTPHandler)
+
+    print(f"{TerminalColors.GREEN}🌐 Serveur Nexus lancé sur http://localhost:{port}{TerminalColors.RESET}")
+
+    LOGGER.info(f"Server started on port {port}")
+
+    try:
+
+        server.serve_forever()
+
+    except KeyboardInterrupt:
+
+        print(f"\n{TerminalColors.YELLOW}🛑 Serveur arrêté.{TerminalColors.RESET}")
+
+        server.shutdown()
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SECTION 10 : INTERFACE CLI (Lignes 1650-1832)
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class NexusCLI:
+
+    def __init__(self):
+
+        self.client = PollinationsClient()
+
+        self.memory = ConversationMemory()
+
+        self.router = ModelRouter(self.client)
+
+        self.running = True
+
+        self.session_file = SESSION_DIR / "current_session.json"
+
+
+
+    def print_banner(self):
+
+        banner = f"""{TerminalColors.CYAN}{TerminalColors.BOLD}
+
+╔══════════════════════════════════════════════════════════════════════════╗
+
+║   🧬 NEXUS POLLINATIONS ULTIMATE v{VERSION}                                ║
+
+║   Agent Autonome de Production — Sans Clé API                           ║
+
+║   Auteur: {AUTHOR:<40} ║
+
+║   Signature: {SIGNATURE:<36} ║
+
+╚══════════════════════════════════════════════════════════════════════════╝
+
+{TerminalColors.RESET}"""
+
+        print(banner)
+
+
+
+    def print_help(self):
+
+        help_text = f"""
+
+{TerminalColors.YELLOW}Commandes disponibles :{TerminalColors.RESET}
+
+  /help          Affiche cette aide
+
+  /clear         Efface l'historique de conversation
+
+  /model <nom>   Change le modèle ({', '.join(AVAILABLE_MODELS)})
+
+  /stats         Affiche les statistiques du client
+
+  /cache         Affiche les statistiques du cache
+
+  /save          Sauvegarde la session actuelle
+
+  /load          Charge la dernière session sauvegardée
+
+  /report        Génère un rapport JSON
+
+  /html          Génère un rapport HTML
+
+  /server        Lance le serveur HTTP
+
+  /quit          Quitte l'agent
+
+"""
+
+        print(help_text)
+
+
+
+    def run(self):
+
+        self.print_banner()
+
+        self.print_help()
+
+
+
+        while self.running:
+
+            try:
+
+                user_input = input(f"{TerminalColors.GREEN}👤 Vous :{TerminalColors.RESET} ").strip()
+
+
+
+                if not user_input:
+
+                    continue
+
+
+
+                if user_input.startswith("/"):
+
+                    self.handle_command(user_input)
+
+                    continue
+
+
+
+                intent = PromptAnalyzer.analyze(user_input)
+
+                print(f"{TerminalColors.DIM}[Intention: {intent['type']}, Langue: {PromptAnalyzer.extract_language(user_input)}]{TerminalColors.RESET}")
+
+
+
+                print(f"{TerminalColors.CYAN}⏳ NEXUS réfléchit...{TerminalColors.RESET}", end="", flush=True)
+
+                context = self.memory.get_context()
+
+                response = self.client.query_with_context(user_input, context)
+
+                print(f"\r{TerminalColors.MAGENTA}🧬 NEXUS :{TerminalColors.RESET} {response}\n")
+
+
+
+                self.memory.add("user", user_input)
+
+                self.memory.add("assistant", response)
+
+
+
+            except KeyboardInterrupt:
+
+                print(f"\n{TerminalColors.RED}Interrompu par l'utilisateur.{TerminalColors.RESET}")
+
+                self.running = False
+
+            except Exception as e:
+
+                LOGGER.error(f"CLI Error: {e}")
+
+                print(f"\n{TerminalColors.RED}Erreur: {e}{TerminalColors.RESET}")
+
+
+
+    def handle_command(self, cmd: str):
+
+        parts = cmd.split()
+
+        command = parts[0].lower()
+
+
+
+        if command == "/quit":
+
+            print(f"{TerminalColors.YELLOW}👋 Fermeture de l'agent.{TerminalColors.RESET}")
+
+            self.running = False
+
+        elif command == "/clear":
+
+            self.memory.clear()
+
+            print(f"{TerminalColors.GREEN}✅ Historique effacé.{TerminalColors.RESET}\n")
+
+        elif command == "/help":
+
+            self.print_help()
+
+        elif command == "/model":
+
+            if len(parts) > 1:
+
+                if self.client.switch_model(parts[1]):
+
+                    print(f"{TerminalColors.GREEN}✅ Modèle changé: {parts[1]}{TerminalColors.RESET}\n")
+
+                else:
+
+                    print(f"{TerminalColors.RED}❌ Modèle invalide. Choix: {', '.join(AVAILABLE_MODELS)}{TerminalColors.RESET}\n")
+
+            else:
+
+                print(f"{TerminalColors.YELLOW}Modèle actuel: {self.client.model}{TerminalColors.RESET}\n")
+
+        elif command == "/stats":
+
+            print(f"{TerminalColors.CYAN}{json.dumps(self.client.get_stats(), indent=2)}{TerminalColors.RESET}\n")
+
+        elif command == "/cache":
+
+            print(f"{TerminalColors.CYAN}{json.dumps(CACHE.stats(), indent=2)}{TerminalColors.RESET}\n")
+
+        elif command == "/save":
+
+            self.memory.save(self.session_file)
+
+            print(f"{TerminalColors.GREEN}✅ Session sauvegardée: {self.session_file}{TerminalColors.RESET}\n")
+
+        elif command == "/load":
+
+            self.memory.load(self.session_file)
+
+            print(f"{TerminalColors.GREEN}✅ Session chargée: {len(self.memory.messages)} messages{C.RESET}\n")
+
+        elif command == "/report":
+
+            report_path = ReportGenerator.generate_json_report(self.memory, self.client.get_stats())
+
+            print(f"{TerminalColors.GREEN}✅ Rapport JSON: {report_path}{TerminalColors.RESET}\n")
+
+        elif command == "/html":
+
+            report_path = ReportGenerator.generate_html_report(self.memory, self.client.get_stats())
+
+            print(f"{TerminalColors.GREEN}✅ Rapport HTML: {report_path}{TerminalColors.RESET}\n")
+
+        elif command == "/server":
+
+            print(f"{TerminalColors.CYAN}🌐 Démarrage du serveur HTTP...{TerminalColors.RESET}")
+
+            threading.Thread(target=start_server, daemon=True).start()
+
+            print(f"{TerminalColors.GREEN}✅ Serveur lancé. Port: {SERVER_PORT}{TerminalColors.RESET}\n")
+
+        else:
+
+            print(f"{TerminalColors.RED}Commande inconnue: {cmd}{TerminalColors.RESET}\n")
+
+
+
+def main():
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--server":
+
+        start_server()
+
+    else:
+
+        cli = NexusCLI()
+
+        cli.run()
+
+
+
+if __name__ == "__main__":
+
+    main()
